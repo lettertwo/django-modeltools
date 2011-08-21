@@ -14,7 +14,16 @@ class PropertyFormatter(object):
         self.__word_delimiter = word_delimiter
 
     def __getitem__(self, key):
-        value = str(getattr(self.__model, key))
+        prop_chain = key.split('__')
+        value = self.__model
+        while prop_chain:
+            try:
+                value = getattr(value, prop_chain.pop(0))
+            except AttributeError:
+                value = None
+            if value is None:
+                break
+        value = str(value)
         if self.__lowercase:
             value = value.lower()
         if not self.__nonwordchars:
@@ -22,17 +31,39 @@ class PropertyFormatter(object):
         return re.sub('\s+', self.__word_delimiter, value)
 
     def keys(self):
-        return self.__model.__dict__.keys()
+        keys = self._get_keys(self.__model)
+        self._add_related_keys(self.__model, keys)
+        return keys
+
+    @classmethod
+    def _add_related_keys(cls, model, keys, prefixes = [], checked_models = []):
+        # Prevent recursion from related models referencing each other.
+        if model in checked_models: return
+        checked_models.append(model)
+        for field in model._meta.fields:
+            if field.rel is not None:
+                m = getattr(model, field.name)
+                if m is not None:
+                    pre = prefixes[:]
+                    pre.append(field.name)
+                    p = '__'.join(pre)
+                    keys += ['%s__%s' % (p, k) for k in cls._get_keys(m)]
+                    cls._add_related_keys(m, keys, pre, checked_models)
+
+    @classmethod
+    def _get_keys(cls, model):
+        return model.__dict__.keys()
 
 
 def format_filename(pattern, add_extension=True, lowercase=True, nonwordchars=False, word_delimiter='_'):
     """
     Creates a method to be used as a value for Django models' upload_to
     argument. The returned method will format a filename based on properties of
-    the model.
+    the model. Properties of related models may also be used by separating the 
+    property name from the model name with '__'.
     
     Usage:
-        thumbnail = models.ImageField(upload_to=format_filename('profile_images/{last_name}_{first_name}'))
+        thumbnail = models.ImageField(upload_to=format_filename('profile_images/{group__name}_{last_name}_{first_name}'))
     """
     def upload_to(self, old_filename):
         extension = os.path.splitext(old_filename)[1]
